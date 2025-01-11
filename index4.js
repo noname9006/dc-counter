@@ -36,7 +36,7 @@ client.once('ready', () => {
 });
 
 async function updateChannelNames() {
-    console.log('Running updateChannelNames function');
+    console.log('Running updateChannelNames function'); // Debug logging
     const guild = client.guilds.cache.first();
     
     if (!guild) {
@@ -47,7 +47,7 @@ async function updateChannelNames() {
     // Fetch only the necessary members with the required roles
     const members = await guild.members.fetch({
         withPresences: false, // Disable presence fetching to reduce memory usage
-        user: { limit: 1000 } // Limit the number of members fetched
+        user: { limit: 10000 } // Limit the number of members fetched
     });
 
     // Update the total member count channel
@@ -127,7 +127,7 @@ client.on('messageCreate', async message => {
         const guild = message.guild;
         const members = await guild.members.fetch({
             withPresences: false,
-            user: { limit: 1000 }
+            user: { limit: 10000 }
         });
 
         let response = '';
