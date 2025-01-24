@@ -28,14 +28,20 @@ const totalMemberCountChannelId = process.env.TOTAL_MEMBER_COUNT_CHANNEL_ID;
 const totalMemberCountNameFormat = process.env.TOTAL_MEMBER_COUNT_NAME_FORMAT;
 const verifiedRoleId = process.env.VERIFIED_ROLE; // Fetch the verified role from environment variables
 
-// Load roles, channels, and channel names from environment variables
-const roles = [];
-const channels = [];
-const channelBaseNames = [];
-for (let i = 1; process.env[`ROLE_${i}`]; i++) {
-    roles.push(process.env[`ROLE_${i}`]);
-    channels.push(process.env[`CHANNEL_${i}`]);
-    channelBaseNames.push(process.env[`CHANNEL_NAME_${i}`]);
+// Load roles, channels, and channel names for scheduled updates from environment variables
+const scheduledRoles = [];
+const scheduledChannels = [];
+const scheduledChannelBaseNames = [];
+for (let i = 1; process.env[`SCHEDULED_ROLE_${i}`]; i++) {
+    scheduledRoles.push(process.env[`SCHEDULED_ROLE_${i}`]);
+    scheduledChannels.push(process.env[`SCHEDULED_CHANNEL_${i}`]);
+    scheduledChannelBaseNames.push(process.env[`SCHEDULED_CHANNEL_NAME_${i}`]);
+}
+
+// Load roles for !count command from environment variables
+const countRoles = [];
+for (let i = 1; process.env[`COUNT_ROLE_${i}`]; i++) {
+    countRoles.push(process.env[`COUNT_ROLE_${i}`]);
 }
 
 client.once('ready', () => {
@@ -70,10 +76,10 @@ async function updateChannelNames() {
         console.error(`Channel with ID "${totalMemberCountChannelId}" not found.`);
     }
 
-    for (let i = 0; i < roles.length; i++) {
-        const roleId = roles[i];
-        const channelId = channels[i];
-        const channelBaseName = channelBaseNames[i];
+    for (let i = 0; i < scheduledRoles.length; i++) {
+        const roleId = scheduledRoles[i];
+        const channelId = scheduledChannels[i];
+        const channelBaseName = scheduledChannelBaseNames[i];
 
         const role = guild.roles.cache.get(roleId);
         if (!role) {
@@ -158,10 +164,10 @@ client.on('messageCreate', async message => {
         response += `Unverified: **${unverifiedMembers.size}** members (${unverifiedPercentage}%) without the verified role.\n\n`;
 
         // Determine the number of roles to process based on the command argument
-        const rolesToProcess = isNaN(n) ? roles.length : Math.min(n, roles.length);
+        const rolesToProcess = isNaN(n) ? countRoles.length : Math.min(n, countRoles.length);
 
         for (let i = 0; i < rolesToProcess; i++) {
-            const roleId = roles[i];
+            const roleId = countRoles[i];
             const role = guild.roles.cache.get(roleId);
             if (!role) {
                 response += `Role with ID ${roleId} not found.\n`;
