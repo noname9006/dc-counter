@@ -1,18 +1,23 @@
 require('dotenv').config(); // Load environment variables from .env file
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const cron = require('node-cron');
+
+// Helper function to get formatted timestamp in UTC
+function getTimestamp() {
+    return new Date().toISOString()
+        .replace('T', ' ')
+        .replace(/\.\d+Z$/, '');
+}
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.MessageContent // Add this if you need to handle message content
+        GatewayIntentBits.MessageContent
     ],
     partials: [
-        Partials.Channel // Add this if you need to handle DM channels or other partials
+        Partials.Channel
     ],
-    // Limit cache sizes to reduce memory usage
     cache: {
         members: { maxSize: 1000 },
         channels: { maxSize: 100 },
@@ -23,46 +28,47 @@ const client = new Client({
 const token = process.env.DISCORD_BOT_TOKEN;
 const allowedRoles = process.env.ALLOWED_ROLES.split(',');
 const ignoredRoleId = process.env.IGNORED_ROLE;
-const cronSchedule = process.env.CRON_SCHEDULE;
+const intervalMinutes = parseInt(process.env.INTERVAL_MINUTES, 10);
 const totalMemberCountChannelId = process.env.TOTAL_MEMBER_COUNT_CHANNEL_ID;
 const totalMemberCountNameFormat = process.env.TOTAL_MEMBER_COUNT_NAME_FORMAT;
-const verifiedRoleId = process.env.VERIFIED_ROLE; // Fetch the verified role from environment variables
+const verifiedRoleId = process.env.VERIFIED_ROLE;
 
-// Load roles, channels, and channel names for scheduled updates from environment variables
-const scheduledRoles = [];
-const scheduledChannels = [];
-const scheduledChannelBaseNames = [];
-for (let i = 1; process.env[`SCHEDULED_ROLE_${i}`]; i++) {
-    scheduledRoles.push(process.env[`SCHEDULED_ROLE_${i}`]);
-    scheduledChannels.push(process.env[`SCHEDULED_CHANNEL_${i}`]);
-    scheduledChannelBaseNames.push(process.env[`SCHEDULED_CHANNEL_NAME_${i}`]);
+// Load roles, channels, and channel names from environment variables
+const roles = [];
+const channels = [];
+const channelBaseNames = [];
+for (let i = 1; process.env[`ROLE_${i}`]; i++) {
+    roles.push(process.env[`ROLE_${i}`]);
+    channels.push(process.env[`CHANNEL_${i}`]);
+    channelBaseNames.push(process.env[`CHANNEL_NAME_${i}`]);
 }
 
-// Load roles for !count command from environment variables
+// Load count roles from environment variables
 const countRoles = [];
 for (let i = 1; process.env[`COUNT_ROLE_${i}`]; i++) {
     countRoles.push(process.env[`COUNT_ROLE_${i}`]);
 }
 
 client.once('ready', () => {
-    console.log('Bot is ready!');
+    console.log(`[${getTimestamp()}] Bot is ready!`);
     scheduleChannelUpdate();
 });
 
 async function updateChannelNames() {
-    console.log('Running updateChannelNames function'); // Debug logging
+    console.log(`[${getTimestamp()}] Running updateChannelNames function`);
     const guild = client.guilds.cache.first();
     
     if (!guild) {
-        console.error('No guild found.');
+        console.error(`[${getTimestamp()}] No guild found.`);
         return;
     }
     
-    // Fetch only the necessary members with the required roles
+    console.log(`[${getTimestamp()}] Fetching members for guild ${guild.name}`);
     const members = await guild.members.fetch({
-        withPresences: false, // Disable presence fetching to reduce memory usage
-        user: { limit: 10000 } // Limit the number of members fetched
+        withPresences: false,
+        user: { limit: 10000 }
     });
+    console.log(`[${getTimestamp()}] Successfully fetched ${members.size} members`);
 
     // Update the total member count channel
     const humanMembers = members.filter(member => !member.user.bot);
@@ -71,19 +77,19 @@ async function updateChannelNames() {
     if (totalMemberCountChannel) {
         const newChannelName = totalMemberCountNameFormat.replace('{count}', totalMemberCount);
         await totalMemberCountChannel.setName(newChannelName);
-        console.log(`Updated total member count channel name to: ${newChannelName}`);
+        console.log(`[${getTimestamp()}] Updated total member count channel name to: ${newChannelName}`);
     } else {
-        console.error(`Channel with ID "${totalMemberCountChannelId}" not found.`);
+        console.error(`[${getTimestamp()}] Channel with ID "${totalMemberCountChannelId}" not found.`);
     }
 
-    for (let i = 0; i < scheduledRoles.length; i++) {
-        const roleId = scheduledRoles[i];
-        const channelId = scheduledChannels[i];
-        const channelBaseName = scheduledChannelBaseNames[i];
+    for (let i = 0; i < roles.length; i++) {
+        const roleId = roles[i];
+        const channelId = channels[i];
+        const channelBaseName = channelBaseNames[i];
 
         const role = guild.roles.cache.get(roleId);
         if (!role) {
-            console.log(`Role with ID ${roleId} not found.`);
+            console.log(`[${getTimestamp()}] Role with ID ${roleId} not found.`);
             continue;
         }
 
@@ -114,37 +120,44 @@ async function updateChannelNames() {
         if (counterChannel) {
             const newChannelName = channelBaseName.replace('{count}', count);
             await counterChannel.setName(newChannelName);
-            console.log(`Updated channel name to: ${newChannelName}`);
+            console.log(`[${getTimestamp()}] Updated channel name to: ${newChannelName}`);
         } else {
-            console.error(`Channel with ID ${channelId} not found.`);
+            console.error(`[${getTimestamp()}] Channel with ID ${channelId} not found.`);
         }
     }
 }
 
 function scheduleChannelUpdate() {
-    cron.schedule(cronSchedule, () => {
+    console.log(`[${getTimestamp()}] Scheduling channel updates every ${intervalMinutes} minutes`);
+    setInterval(() => {
+        console.log(`[${getTimestamp()}] Running scheduled channel update`);
         updateChannelNames();
-    }, {
-        scheduled: true
-    });
+    }, intervalMinutes * 60000); // Convert minutes to milliseconds
 }
 
 client.on('messageCreate', async message => {
     if (message.content.startsWith('!count')) {
+        console.log(`[${getTimestamp()}] Command "!count" used by ${message.author.tag}`);
+        
         const args = message.content.split(' ');
-        const n = parseInt(args[1], 10); // Parse the second argument as a number
+        const n = parseInt(args[1], 10);
         const memberRoles = message.member.roles.cache.map(role => role.name);
         const hasAllowedRole = allowedRoles.some(role => memberRoles.includes(role));
 
         if (!hasAllowedRole) {
+            console.log(`[${getTimestamp()}] Command access denied - user lacks required role`);
             return;
         }
 
         const guild = message.guild;
+        console.log(`[${getTimestamp()}] Fetching member data for guild ${guild.name}`);
+        
         const members = await guild.members.fetch({
             withPresences: false,
             user: { limit: 10000 }
         });
+
+        console.log(`[${getTimestamp()}] Successfully fetched ${members.size} members`);
 
         let response = '';
 
@@ -165,11 +178,13 @@ client.on('messageCreate', async message => {
 
         // Determine the number of roles to process based on the command argument
         const rolesToProcess = isNaN(n) ? countRoles.length : Math.min(n, countRoles.length);
+        console.log(`[${getTimestamp()}] Processing ${rolesToProcess} roles for counting`);
 
         for (let i = 0; i < rolesToProcess; i++) {
             const roleId = countRoles[i];
             const role = guild.roles.cache.get(roleId);
             if (!role) {
+                console.log(`[${getTimestamp()}] Role not found: ${roleId}`);
                 response += `Role with ID ${roleId} not found.\n`;
                 continue;
             }
@@ -196,7 +211,6 @@ client.on('messageCreate', async message => {
             });
 
             count = membersWithRole.size;
-            // Display three decimal places for all roles
             const percentage = ((count / totalMembersCount) * 100).toFixed(3);
 
             if (count > 0) {
@@ -211,7 +225,9 @@ client.on('messageCreate', async message => {
             }
         }
 
-        message.channel.send(response);
+        console.log(`[${getTimestamp()}] Sending response message to channel ${message.channel.name}`);
+        await message.channel.send(response);
+        console.log(`[${getTimestamp()}] Response message sent successfully`);
     }
 });
 
