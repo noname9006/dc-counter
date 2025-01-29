@@ -1,15 +1,11 @@
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables from .env file
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
-// Debug and logging configuration
-const DEBUG_MODE = process.env.DEBUG_MODE === 'true';
+// Helper function to get formatted timestamp in UTC
 function getTimestamp() {
-    return new Date().toISOString().replace('T', ' ').substring(0, 19);
-}
-function debugLog(...args) {
-    if (DEBUG_MODE) {
-        console.log(`[DEBUG ${getTimestamp()}]`, ...args);
-    }
+    return new Date().toISOString()
+        .replace('T', ' ')
+        .replace(/\.\d+Z$/, '');
 }
 
 const client = new Client({
@@ -19,212 +15,227 @@ const client = new Client({
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.MessageContent
     ],
-    partials: [Partials.Channel],
+    partials: [
+        Partials.Channel
+    ],
     cache: {
-        members: { maxSize: 200000 },
+        members: { maxSize: 1000 },
         channels: { maxSize: 100 },
         roles: { maxSize: 100 }
     }
 });
 
-// Environment variables
-const token = process.env.DISCORD_TOKEN;
+const token = process.env.DISCORD_BOT_TOKEN;
 const allowedRoles = process.env.ALLOWED_ROLES.split(',');
-const allowedChannels = process.env.ALLOWED_CHANNELS.split(',');
 const ignoredRoleId = process.env.IGNORED_ROLE;
-const verifiedRoleId = process.env.VERIFIED_ROLE;
 const intervalMinutes = parseInt(process.env.INTERVAL_MINUTES, 10);
 const totalMemberCountChannelId = process.env.TOTAL_MEMBER_COUNT_CHANNEL_ID;
 const totalMemberCountNameFormat = process.env.TOTAL_MEMBER_COUNT_NAME_FORMAT;
+const verifiedRoleId = process.env.VERIFIED_ROLE;
 
-// Load configuration arrays
-const scheduledRoles = [];
-const scheduledChannels = [];
-const scheduledChannelNames = [];
-const countRoles = [];
-
-// Load roles and channels from environment
-for (let i = 1; i <= 6; i++) {
-    const roleId = process.env[`SCHEDULED_ROLE_${i}`];
-    const channelId = process.env[`SCHEDULED_CHANNEL_${i}`];
-    const channelName = process.env[`SCHEDULED_CHANNEL_NAME_${i}`];
-    const countRole = process.env[`COUNT_ROLE_${i}`];
-    if (roleId && channelId && channelName) {
-        scheduledRoles.push(roleId);
-        scheduledChannels.push(channelId);
-        scheduledChannelNames.push(channelName);
-    }
-    if (countRole) {
-        countRoles.push(countRole);
-    }
+// Load roles, channels, and channel names from environment variables
+const roles = [];
+const channels = [];
+const channelBaseNames = [];
+for (let i = 1; process.env[`ROLE_${i}`]; i++) {
+    roles.push(process.env[`ROLE_${i}`]);
+    channels.push(process.env[`CHANNEL_${i}`]);
+    channelBaseNames.push(process.env[`CHANNEL_NAME_${i}`]);
 }
 
-function countMembersWithHighestRole(members, roleId, debugMode = false) {
-    let count = 0;
-    const countedMembers = new Set();
-    members.forEach(member => {
-        if (member.user.bot) return;
-        // Get all member's roles except @everyone
-        const memberRoles = member.roles.cache
-            .filter(role => role.name !== '@everyone')
-            .sort((a, b) => b.position - a.position);
-        if (memberRoles.size === 0) return;
-        // Get highest non-ignored role
-        let highestRole = memberRoles.first();
-        if (highestRole && highestRole.id === ignoredRoleId) {
-            highestRole = memberRoles
-                .filter(r => r.id !== ignoredRoleId)
-                .first();
-        }
-        // Only count if this role is their highest and not already counted
-        if (highestRole && highestRole.id === roleId && !countedMembers.has(member.id)) {
-            count++;
-            countedMembers.add(member.id);
-            if (debugMode) {
-                debugLog(`Counted ${member.user.tag} for ${highestRole.name}`);
-                debugLog(`Their roles: ${memberRoles.map(r => r.name).join(', ')}`);
-            }
-        }
-    });
-    return count;
+// Load count roles from environment variables
+const countRoles = [];
+for (let i = 1; process.env[`COUNT_ROLE_${i}`]; i++) {
+    countRoles.push(process.env[`COUNT_ROLE_${i}`]);
 }
 
 client.once('ready', () => {
-    debugLog('Bot initialized and ready');
-    debugLog('Configuration loaded:', {
-        scheduledRoles: scheduledRoles.length,
-        countRoles: countRoles.length,
-        allowedChannels: allowedChannels.length,
-        updateInterval: intervalMinutes
-    });
-    scheduleUpdates();
+    console.log(`[${getTimestamp()}] Bot is ready!`);
+    scheduleChannelUpdate();
 });
 
-async function updateChannels() {
-    debugLog('Starting channel update process');
+async function updateChannelNames() {
+    console.log(`[${getTimestamp()}] Running updateChannelNames function`);
     const guild = client.guilds.cache.first();
+    
     if (!guild) {
-        debugLog('No guild found, aborting update');
+        console.error(`[${getTimestamp()}] No guild found.`);
         return;
     }
-    try {
-        const members = await guild.members.fetch();
-        const totalMembers = members.filter(member => !member.user.bot).size;
-        debugLog(`Total non-bot members: ${totalMembers}`);
-        // Update total member count channel
-        const totalChannel = guild.channels.cache.get(totalMemberCountChannelId);
-        if (totalChannel) {
-            const newName = totalMemberCountNameFormat.replace('{count}', totalMembers);
-            await totalChannel.setName(newName);
-            debugLog(`Updated total member count: ${newName}`);
+    
+    console.log(`[${getTimestamp()}] Fetching members for guild ${guild.name}`);
+    const members = await guild.members.fetch({
+        withPresences: false,
+        user: { limit: 10000 }
+    });
+    console.log(`[${getTimestamp()}] Successfully fetched ${members.size} members`);
+
+    // Update the total member count channel
+    const humanMembers = members.filter(member => !member.user.bot);
+    const totalMemberCount = humanMembers.size;
+    const totalMemberCountChannel = guild.channels.cache.get(totalMemberCountChannelId);
+    if (totalMemberCountChannel) {
+        const newChannelName = totalMemberCountNameFormat.replace('{count}', totalMemberCount);
+        await totalMemberCountChannel.setName(newChannelName);
+        console.log(`[${getTimestamp()}] Updated total member count channel name to: ${newChannelName}`);
+    } else {
+        console.error(`[${getTimestamp()}] Channel with ID "${totalMemberCountChannelId}" not found.`);
+    }
+
+    for (let i = 0; i < roles.length; i++) {
+        const roleId = roles[i];
+        const channelId = channels[i];
+        const channelBaseName = channelBaseNames[i];
+
+        const role = guild.roles.cache.get(roleId);
+        if (!role) {
+            console.log(`[${getTimestamp()}] Role with ID ${roleId} not found.`);
+            continue;
         }
-        // Update role-specific channels
-        for (let i = 0; i < scheduledRoles.length; i++) {
-            const roleId = scheduledRoles[i];
-            const channelId = scheduledChannels[i];
-            const nameFormat = scheduledChannelNames[i];
-            const role = guild.roles.cache.get(roleId);
-            const channel = guild.channels.cache.get(channelId);
-            if (!role || !channel) {
-                debugLog(`Missing role or channel for index ${i}`, { roleId, channelId });
-                continue;
+
+        let count = 0;
+        let hasIgnoredRole = false;
+
+        const membersWithRole = members.filter(member => {
+            const highestRole = member.roles.highest;
+            if (highestRole.id === roleId) {
+                return true;
             }
-            const count = countMembersWithHighestRole(members, roleId);
-            const newName = nameFormat.replace('{count}', count);
-            await channel.setName(newName);
-            debugLog(`Updated ${role.name} channel: ${newName}`);
+            if (highestRole.id === ignoredRoleId) {
+                const nextHighestRole = member.roles.cache
+                    .filter(r => r.id !== ignoredRoleId)
+                    .sort((a, b) => b.position - a.position)
+                    .first();
+                if (nextHighestRole && nextHighestRole.id === roleId) {
+                    hasIgnoredRole = true;
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        count = membersWithRole.size;
+
+        const counterChannel = guild.channels.cache.get(channelId);
+        if (counterChannel) {
+            const newChannelName = channelBaseName.replace('{count}', count);
+            await counterChannel.setName(newChannelName);
+            console.log(`[${getTimestamp()}] Updated channel name to: ${newChannelName}`);
+        } else {
+            console.error(`[${getTimestamp()}] Channel with ID ${channelId} not found.`);
         }
-    } catch (error) {
-        debugLog('Error in updateChannels:', error);
     }
 }
 
-function scheduleUpdates() {
-    const intervalMs = intervalMinutes * 60 * 1000;
-    debugLog(`Setting up interval updates every ${intervalMinutes} minutes (${intervalMs}ms)`);
-    updateChannels();
-    setInterval(updateChannels, intervalMs);
+function scheduleChannelUpdate() {
+    console.log(`[${getTimestamp()}] Scheduling channel updates every ${intervalMinutes} minutes`);
+    setInterval(() => {
+        console.log(`[${getTimestamp()}] Running scheduled channel update`);
+        updateChannelNames();
+    }, intervalMinutes * 60000); // Convert minutes to milliseconds
 }
 
 client.on('messageCreate', async message => {
-    if (!message.content.startsWith('!count')) return;
-    debugLog('Count command received', {
-        channel: message.channel.id,
-        user: message.author.tag
-    });
-    if (!allowedChannels.includes(message.channel.id)) {
-        debugLog('Command used in unauthorized channel');
-        return;
-    }
-    const memberRoles = message.member.roles.cache.map(role => role.name);
-    if (!allowedRoles.some(role => memberRoles.includes(role))) {
-        debugLog('Command used by unauthorized user');
-        return;
-    }
-    try {
+    if (message.content.startsWith('!count')) {
+        console.log(`[${getTimestamp()}] Command "!count" used by ${message.author.tag}`);
+        
+        const args = message.content.split(' ');
+        const n = parseInt(args[1], 10);
+        const memberRoles = message.member.roles.cache.map(role => role.name);
+        const hasAllowedRole = allowedRoles.some(role => memberRoles.includes(role));
+
+        if (!hasAllowedRole) {
+            console.log(`[${getTimestamp()}] Command access denied - user lacks required role`);
+            return;
+        }
+
         const guild = message.guild;
-        const members = await guild.members.fetch();
-        let response = '';
-        // Count total non-bot members
-        const totalMembers = members.filter(member => !member.user.bot).size;
-        // Get unverified members count
-        const unverifiedMembers = members.filter(member => 
-            !member.user.bot && !member.roles.cache.has(verifiedRoleId)
-        ).size;
-        const unverifiedPercentage = ((unverifiedMembers / totalMembers) * 100).toFixed(2);
-        response += `Total Members: **${totalMembers}** members.\n`;
-        response += `Unverified: **${unverifiedMembers}** members (${unverifiedPercentage}%) without the verified role.\n\n`;
-        // Track all counted members for verification
-        const processedMembers = new Set();
-        let totalRoleCount = 0;
-        // Count members by role
-        for (const roleId of countRoles) {
+        console.log(`[${getTimestamp()}] Fetching member data for guild ${guild.name}`);
+        
+        const members = await guild.members.fetch({
+            withPresences: false,
+            user: { limit: 10000 }
+        });
+
+        console.log(`[${getTimestamp()}] Successfully fetched ${members.size} members`);
+
+        // Get current UTC timestamp
+        const currentUTC = new Date().toISOString()
+            .replace('T', ' ')
+            .replace(/\.\d+Z$/, '');
+
+        let response = `Last Updated: **${currentUTC}** (UTC)\n\n`;
+
+        // Calculate total members count excluding bots
+        const totalMembersCount = members.filter(member => !member.user.bot).size;
+        response += `Total Members: **${totalMembersCount}** members.\n`;
+
+        // Filter unverified members
+        const unverifiedMembers = members.filter(member => {
+            return !member.roles.cache.has(verifiedRoleId) && !member.user.bot;
+        });
+
+        // Calculate verified members and percentages
+        const verifiedMembers = totalMembersCount - unverifiedMembers.size;
+        const unverifiedPercentage = ((unverifiedMembers.size / totalMembersCount) * 100).toFixed(2);
+        const verifiedPercentage = ((verifiedMembers / totalMembersCount) * 100).toFixed(2);
+
+        // Add member counts to the response
+        response += `Unverified: **${unverifiedMembers.size}** members (${unverifiedPercentage}%) without the verified role.\n`;
+        response += `Verified: **${verifiedMembers}** members (${verifiedPercentage}%) with the verified role.\n\n`;
+
+        // Determine the number of roles to process based on the command argument
+        const rolesToProcess = isNaN(n) ? countRoles.length : Math.min(n, countRoles.length);
+        console.log(`[${getTimestamp()}] Processing ${rolesToProcess} roles for counting`);
+
+        for (let i = 0; i < rolesToProcess; i++) {
+            const roleId = countRoles[i];
             const role = guild.roles.cache.get(roleId);
-            if (!role) continue;
-            const count = countMembersWithHighestRole(members, roleId, DEBUG_MODE);
-            totalRoleCount += count;
-            const percentage = ((count / totalMembers) * 100).toFixed(3);
-            response += `${role.name}: **${count}** members (${percentage}%) with it as their highest role.\n`;
-            debugLog(`${role.name} count: ${count}`);
-        }
-        if (DEBUG_MODE) {
-            debugLog('\n=== Final Count Verification ===');
-            debugLog(`Total members: ${totalMembers}`);
-            debugLog(`Unverified members: ${unverifiedMembers}`);
-            debugLog(`Role-counted members: ${totalRoleCount}`);
-            debugLog(`Total accounted for: ${unverifiedMembers + totalRoleCount}`);
-            debugLog(`Difference: ${totalMembers - (unverifiedMembers + totalRoleCount)}`);
+            if (!role) {
+                console.log(`[${getTimestamp()}] Role not found: ${roleId}`);
+                response += `Role with ID ${roleId} not found.\n`;
+                continue;
+            }
 
-            // Log unaccounted members
-            const unaccountedMembers = members.filter(member => {
-                if (member.user.bot) return false;
-                const memberRoles = member.roles.cache
-                    .filter(role => role.name !== '@everyone')
-                    .sort((a, b) => b.position - a.position);
-                if (memberRoles.size === 0) return true;
-                let highestRole = memberRoles.first();
-                if (highestRole && highestRole.id === ignoredRoleId) {
-                    highestRole = memberRoles
-                        .filter(r => r.id !== ignoredRoleId)
-                        .first();
+            let count = 0;
+            let hasIgnoredRole = false;
+
+            const membersWithRole = members.filter(member => {
+                const highestRole = member.roles.highest;
+                if (highestRole.id === roleId) {
+                    return true;
                 }
-                return !member.roles.cache.has(verifiedRoleId) || !countRoles.includes(highestRole?.id);
+                if (highestRole.id === ignoredRoleId) {
+                    const nextHighestRole = member.roles.cache
+                        .filter(r => r.id !== ignoredRoleId)
+                        .sort((a, b) => b.position - a.position)
+                        .first();
+                    if (nextHighestRole && nextHighestRole.id === roleId) {
+                        hasIgnoredRole = true;
+                        return true;
+                    }
+                }
+                return false;
             });
 
-            debugLog(`Unaccounted members: ${unaccountedMembers.size}`);
-            unaccountedMembers.each(member => {
-                const memberRoles = member.roles.cache
-                    .filter(role => role.name !== '@everyone')
-                    .sort((a, b) => b.position - a.position);
-                const highestRole = memberRoles.first();
-                debugLog(`Member: ${member.user.tag}, Highest Role: ${highestRole?.name || 'None'}`);
-            });
+            count = membersWithRole.size;
+            const percentage = ((count / totalMembersCount) * 100).toFixed(3);
+
+            if (count > 0) {
+                response += `${role.name}: **${count}** members (${percentage}%) with it as their highest role`;
+                if (hasIgnoredRole) {
+                    const ignoredRole = guild.roles.cache.get(ignoredRoleId);
+                    response += ` (including one with ${ignoredRole ? ignoredRole.name : 'ignored role'})`;
+                }
+                response += '.\n';
+            } else {
+                response += `${role.name}: **0** members (${percentage}%) with it as their highest role.\n`;
+            }
         }
+
+        console.log(`[${getTimestamp()}] Sending response message to channel ${message.channel.name}`);
         await message.channel.send(response);
-        debugLog('Count command completed successfully');
-    } catch (error) {
-        debugLog('Error in count command:', error);
-        await message.channel.send('An error occurred while counting members.');
+        console.log(`[${getTimestamp()}] Response message sent successfully`);
     }
 });
 
