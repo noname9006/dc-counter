@@ -133,7 +133,7 @@ npm start
 Or run directly:
 
 ```bash
-node index14.js
+node counter.js
 ```
 
 ### Debug Mode
