@@ -14,6 +14,21 @@ function getTimestamp() {
     return new Date().toISOString().replace('T', ' ').substring(0, 19);
 }
 
+// Helper function to get the date in DD Month YYYY format
+function getFullDateFormat() {
+    const now = new Date();
+    const months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    const day = now.getDate().toString().padStart(2, '0');
+    const month = months[now.getMonth()];
+    const year = now.getFullYear();
+    
+    return `${day} ${month} ${year}`;
+}
+
 // Custom logging function
 function debugLog(message, isMemberInfo = false, ...args) {
     if (DEBUG_MODE || !isMemberInfo) {
@@ -38,7 +53,9 @@ const client = new Client({
 const token = process.env.DISCORD_TOKEN;
 const allowedRoles = process.env.ALLOWED_ROLES.split(',');
 const allowedChannels = process.env.ALLOWED_CHANNELS.split(',');
-const ignoredRoleId = process.env.IGNORED_ROLE;
+const ignoredRoleIds = process.env.IGNORED_ROLE
+    ? process.env.IGNORED_ROLE.split(',').map(r => r.trim()).filter(Boolean)
+    : [];
 const verifiedRoleId = process.env.VERIFIED_ROLE;
 const intervalMinutes = parseInt(process.env.INTERVAL_MINUTES) || 5;
 
@@ -60,36 +77,47 @@ setInterval(() => {
     messageCache.clear();
 }, 24 * 60 * 60 * 1000);
 
-function countMembersWithHighestRole(members, roleId, verifiedRoleId, countedMembers = new Set()) {
+/**
+ * Check if member has any ignored role
+ */
+function memberHasIgnoredRole(member, ignoredRoleIds) {
+    return member.roles.cache.some(r => ignoredRoleIds.includes(r.id));
+}
+
+/**
+ * Get the highest count role for a member
+ * Only considers roles in countRoleIds, ignores roles in ignoredRoleIds
+ * Returns null if member has any ignored role
+ */
+function getHighestCountRole(member, countRoleIds, ignoredRoleIds, guild) {
+    // If member has any ignored role, exclude from counting
+    if (memberHasIgnoredRole(member, ignoredRoleIds)) return null;
+    // Filter member's roles to only roles in countRoleIds
+    const countRolesArr = member.roles.cache.filter(r => countRoleIds.includes(r.id));
+    if (countRolesArr.size === 0) return null;
+    // Get the highest one by position (Discord role position descending)
+    return countRolesArr.sort((a, b) => b.position - a.position).first();
+}
+
+/**
+ * Count members whose highest role (among countRoleIds) is roleId
+ * Excludes members with any ignored role
+ */
+function countMembersWithCountRole(members, roleId, countRoleIds, verifiedRoleId, ignoredRoleIds, countedMembers = new Set()) {
     let count = 0;
     let roleMemberIds = new Set();
 
     members.forEach(member => {
         // Skip bots and already counted members
         if (member.user.bot || countedMembers.has(member.id)) return;
-        
         // Skip unverified members
         if (!member.roles.cache.has(verifiedRoleId)) return;
+        // Skip members with any ignored role
+        if (memberHasIgnoredRole(member, ignoredRoleIds)) return;
 
-        const memberRoles = member.roles.cache;
-        const highestRole = member.roles.highest;
+        const highestCountRole = getHighestCountRole(member, countRoleIds, ignoredRoleIds, member.guild);
 
-        // Handle ignored role case
-        if (highestRole.id === ignoredRoleId) {
-            const nextHighestRole = memberRoles
-                .filter(r => r.id !== ignoredRoleId && !r.managed)
-                .sort((a, b) => b.position - a.position)
-                .first();
-
-            if (nextHighestRole && nextHighestRole.id === roleId) {
-                count++;
-                roleMemberIds.add(member.id);
-                countedMembers.add(member.id);
-                debugLog(`Counted member ${member.user.tag} for role ${roleId} (ignored role)`, true);
-            }
-        }
-        // Handle normal case
-        else if (highestRole.id === roleId) {
+        if (highestCountRole && highestCountRole.id === roleId) {
             count++;
             roleMemberIds.add(member.id);
             countedMembers.add(member.id);
@@ -139,10 +167,12 @@ async function updateChannelNames() {
                 continue;
             }
 
-            const { count } = countMembersWithHighestRole(
+            const { count } = countMembersWithCountRole(
                 guild.members.cache,
                 roleId,
+                countRoles,
                 verifiedRoleId,
+                ignoredRoleIds,
                 countedMembers
             );
 
@@ -232,14 +262,16 @@ client.on('messageCreate', async message => {
             // Process each member
             for (const [id, member] of guild.members.cache) {
                 if (member.user.bot) continue;  // Skip bots
-                
+
                 const userId = member.user.id;
                 const username = member.user.tag.replace(/,/g, '');  // Remove commas to avoid CSV issues
-                const highestRole = member.roles.highest.name.replace(/,/g, '');
-                const serverJoinDate = member.joinedAt.toISOString().slice(0, 19).replace('T', ' ');
-                const discordJoinDate = member.user.createdAt.toISOString().slice(0, 19).replace('T', ' ');
+                // Use the highest count role for CSV (can be blank if has none)
+                const highestRoleObj = getHighestCountRole(member, countRoles, ignoredRoleIds, guild);
+                const highestRole = highestRoleObj ? highestRoleObj.name.replace(/,/g, '') : '';
+                const serverJoinDate = member.joinedAt ? member.joinedAt.toISOString().slice(0, 19).replace('T', ' ') : '';
+                const discordJoinDate = member.user.createdAt ? member.user.createdAt.toISOString().slice(0, 19).replace('T', ' ') : '';
                 const messagesNumber = messageCache.get(userId) || 0;
-                
+
                 // Add line to CSV
                 csvContent += `${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`;
             }
@@ -288,12 +320,13 @@ client.on('messageCreate', async message => {
             return;
         }
 
-        // Regular !count command
+        // Regular !count command - use the same embed styling as index13m.js
         const embed = new EmbedBuilder()
             .setTitle(`Total members: ${totalMembers}`)
-            .setDescription(`Unverified members: ${unverifiedMembers} (${unverifiedPercentage}%)`)
+            .setDescription('Members with highest roles:')
+            .setColor(0xF2B518)
             .setFooter({
-                text: 'Botanix Labs',
+                text: `Botanix Labs                                                                        ${getFullDateFormat()}`,
                 iconURL: 'https://a-us.storyblok.com/f/1014909/512x512/026e26392f/dark_512-1.png'
             });
 
@@ -305,10 +338,12 @@ client.on('messageCreate', async message => {
             const role = guild.roles.cache.get(roleId);
             if (!role) continue;
 
-            const { count, memberIds } = countMembersWithHighestRole(
+            const { count, memberIds } = countMembersWithCountRole(
                 guild.members.cache,
                 roleId,
+                countRoles,
                 verifiedRoleId,
+                ignoredRoleIds,
                 globalCountedMembers
             );
 
@@ -324,10 +359,44 @@ client.on('messageCreate', async message => {
                 percentage = ((count / totalMembers) * 100).toFixed(3);
             }
 
-            embed.addFields({ name: role.name, value: `${count} (${percentage}%)`, inline: true });
+            // Remove "ambassador" from role name
+            const displayName = role.name.replace(/\bambassador\b/gi, '').trim();
+
+            // Add emoji based on index
+            let emojiPrefix = '';
+            switch(i) {
+                case 1:
+                    emojiPrefix = '🌱  ';  // 2nd role
+                    break;
+                case 2:
+                    emojiPrefix = '🌼  ';  // 3rd role
+                    break;
+                case 3:
+                    emojiPrefix = '🌲  ';  // 4th role
+                    break;
+                case 4:
+                    emojiPrefix = '🌳  ';  // 5th role
+                    break;
+                case 5:
+                    emojiPrefix = '🥼  ';  // 6th role
+                    break;
+            }
+
+            embed.addFields({ 
+                name: `${emojiPrefix}${displayName}`, 
+                value: `${count} (${percentage}%)`, 
+                inline: true 
+            });
         }
 
-        // Verify counts in debug mode
+        // Add unverified members as the last field
+        embed.addFields({ 
+            name: 'Unverified Members', 
+            value: `${unverifiedMembers} (${unverifiedPercentage}%)`, 
+            inline: false 
+        });
+
+         // Verify counts
         if (DEBUG_MODE) {
             debugLog('\n=== Final Count Verification ===');
             debugLog(`Total members: ${totalMembers}`);
@@ -335,10 +404,12 @@ client.on('messageCreate', async message => {
             debugLog(`Counted unique members: ${globalCountedMembers.size}`);
             debugLog(`Unaccounted verified members: ${totalMembers - unverifiedMembers - globalCountedMembers.size}`);
 
+            // List unaccounted verified members
             const unaccountedMembers = guild.members.cache
                 .filter(m => 
                     m.roles.cache.has(verifiedRoleId) && 
-                    !globalCountedMembers.has(m.id)
+                    !globalCountedMembers.has(m.id) &&
+                    !memberHasIgnoredRole(m, ignoredRoleIds)
                 );
 
             if (unaccountedMembers.size > 0) {
