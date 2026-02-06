@@ -155,10 +155,11 @@ The bot updates channel names on a scheduled interval (configured via `INTERVAL_
 
 ### Message Tracking
 
-The bot tracks message counts for the `!count export` command:
-- Counts are cached in memory for 24 hours
-- Cache is cleared every 24 hours
-- Only messages since bot startup are counted
+The bot counts messages on-demand during CSV exports:
+- Message counts are fetched from Discord's message history during export operations
+- No real-time message tracking or caching in memory
+- Counts include all historical messages accessible to the bot across all channels
+- **Note**: For large servers, the `!count export` command may take significant time to complete as it fetches message history for each user
 
 ### Purge Safety Features
 
@@ -177,7 +178,7 @@ Exports include the following fields:
 - Highest Role (from count roles)
 - Server Join Date (UTC)
 - Discord Account Creation Date (UTC)
-- Message Count (24-hour window)
+- Message Count (historical, fetched on-demand from all accessible channels)
 
 ## Notes
 

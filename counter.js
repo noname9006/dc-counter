@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, AttachmentBuilder } =
 const setupCountUnverifiedCommand = require('./countUnverified');
 const { setupExtractCommands } = require('./unverified');
 const { setupPurgeCommands } = require('./purge');
+const { getUserMessageCount, ExportProgress } = require('./export');
 const fs = require('fs');
 const path = require('path');
 
@@ -69,13 +70,7 @@ const scheduledChannels = Array.from({ length: 6 }, (_, i) => process.env[`SCHED
 const scheduledChannelNames = Array.from({ length: 6 }, (_, i) => process.env[`SCHEDULED_CHANNEL_NAME_${i + 1}`]).filter(Boolean);
 const countRoles = Array.from({ length: 6 }, (_, i) => process.env[`COUNT_ROLE_${i + 1}`]).filter(Boolean);
 
-// Message cache for tracking user messages (last 24 hours)
-const messageCache = new Map();
 
-// Clear message cache every 24 hours
-setInterval(() => {
-    messageCache.clear();
-}, 24 * 60 * 60 * 1000);
 
 /**
  * Check if member has any ignored role
@@ -193,14 +188,7 @@ function scheduleUpdates() {
     setInterval(updateChannelNames, intervalMs);
 }
 
-// Track messages for counting
-client.on('messageCreate', message => {
-    if (message.author.bot) return;
-    
-    const userId = message.author.id;
-    const currentCount = messageCache.get(userId) || 0;
-    messageCache.set(userId, currentCount + 1);
-});
+
 
 client.once('ready', () => {
     debugLog('Bot is ready!');
@@ -255,6 +243,9 @@ client.on('messageCreate', async message => {
             const guild = message.guild;
             await guild.members.fetch();
             
+            // Create a progress tracker for message counting
+            const progress = new ExportProgress(guild.id);
+            
             // Prepare CSV header
             const csvHeader = 'UserID,Username,Highest Role,Server Join Date,Discord Join Date,Messages Number\n';
             let csvContent = csvHeader;
@@ -270,7 +261,9 @@ client.on('messageCreate', async message => {
                 const highestRole = highestRoleObj ? highestRoleObj.name.replace(/,/g, '') : '';
                 const serverJoinDate = member.joinedAt ? member.joinedAt.toISOString().slice(0, 19).replace('T', ' ') : '';
                 const discordJoinDate = member.user.createdAt ? member.user.createdAt.toISOString().slice(0, 19).replace('T', ' ') : '';
-                const messagesNumber = messageCache.get(userId) || 0;
+                
+                // Fetch message count using historical message fetching
+                const messagesNumber = await getUserMessageCount(guild, userId, progress);
 
                 // Add line to CSV
                 csvContent += `${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`;
