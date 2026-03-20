@@ -22,8 +22,9 @@ class PurgeManager {
 }
 
 class PurgeOperation {
-    constructor(guild, type, rate, debugLog) {
-        this.guild = guild;
+    constructor(guildId, client, type, rate, debugLog) {
+        this.guildId = guildId;
+        this.client = client;
         this.type = type;
         this.rate = rate;
         this.debugLog = debugLog;
@@ -76,12 +77,17 @@ class PurgeOperation {
     }
 
     async processBatch(verifiedRoleId) {
-        await this.guild.members.fetch();
+        const guild = this.client.guilds.cache.get(this.guildId);
+        if (!guild) {
+            this.log('ERROR', { reason: `Guild ${this.guildId} not found in cache` });
+            return;
+        }
+        await guild.members.fetch();
 
         const now = new Date();
         const cutoffDate = new Date(now - 24 * 60 * 60 * 1000); // 24 hours ago
 
-        const members = this.guild.members.cache
+        const members = guild.members.cache
             .filter(member => {
                 // Basic filters
                 if (member.user.bot) return false;
@@ -258,7 +264,7 @@ function setupPurgeCommands(client, { allowedChannels, allowedRoles, verifiedRol
             return;
         }
 
-        const operation = new PurgeOperation(message.guild, type, rate, debugLog);
+        const operation = new PurgeOperation(message.guild.id, client, type, rate, debugLog);
         purgeManager.setOperation(message.guild.id, type, operation);
 
         if (await operation.start(verifiedRoleId)) {

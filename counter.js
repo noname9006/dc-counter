@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, AttachmentBuilder, Options } = require('discord.js');
 const setupCountUnverifiedCommand = require('./countUnverified');
 const { setupExtractCommands } = require('./unverified');
 const { setupPurgeCommands } = require('./purge');
@@ -45,9 +45,21 @@ const client = new Client({
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.MessageContent
     ],
-    partials: [
-        Partials.Channel
-    ]
+    partials: [Partials.Channel],
+    sweepers: {
+        guildMembers: {
+            interval: 1800,      // sweep every 30 minutes
+            filter: () => member => !member.user.bot
+        },
+        users: {
+            interval: 3600,
+            filter: () => user => user.id !== client.user?.id
+        },
+        messages: {
+            interval: 1800,
+            lifetime: 900        // evict messages older than 15 minutes
+        }
+    }
 });
 
 // Environment variables
@@ -100,7 +112,6 @@ function getHighestCountRole(member, countRoleIds, ignoredRoleIds, guild) {
  */
 function countMembersWithCountRole(members, roleId, countRoleIds, verifiedRoleId, ignoredRoleIds, countedMembers = new Set()) {
     let count = 0;
-    let roleMemberIds = new Set();
 
     members.forEach(member => {
         // Skip bots and already counted members
@@ -114,13 +125,12 @@ function countMembersWithCountRole(members, roleId, countRoleIds, verifiedRoleId
 
         if (highestCountRole && highestCountRole.id === roleId) {
             count++;
-            roleMemberIds.add(member.id);
             countedMembers.add(member.id);
             debugLog(`Counted member ${member.user.tag} for role ${roleId}`, true);
         }
     });
 
-    return { count, memberIds: roleMemberIds };
+    return { count };
 }
 
 async function updateChannelNames() {
@@ -248,8 +258,12 @@ client.on('messageCreate', async message => {
             
             // Prepare CSV header
             const csvHeader = 'UserID,Username,Highest Role,Server Join Date,Discord Join Date,Messages Number\n';
-            let csvContent = csvHeader;
-            
+
+            // Create temporary file using a write stream
+            const tempFilePath = path.join(__dirname, 'user_export.csv');
+            const writeStream = fs.createWriteStream(tempFilePath, { encoding: 'utf8' });
+            writeStream.write(csvHeader);
+
             // Process each member
             for (const [id, member] of guild.members.cache) {
                 if (member.user.bot) continue;  // Skip bots
@@ -265,13 +279,16 @@ client.on('messageCreate', async message => {
                 // Fetch message count using historical message fetching
                 const messagesNumber = await getUserMessageCount(guild, userId, progress);
 
-                // Add line to CSV
-                csvContent += `${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`;
+                // Write row to stream
+                writeStream.write(`${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`);
             }
-            
-            // Create temporary file
-            const tempFilePath = path.join(__dirname, 'user_export.csv');
-            fs.writeFileSync(tempFilePath, csvContent, 'utf8');
+
+            // Close stream and wait for finish
+            await new Promise((resolve, reject) => {
+                writeStream.on('finish', resolve);
+                writeStream.on('error', reject);
+                writeStream.end();
+            });
             
             // Create attachment and send file
             const attachment = new AttachmentBuilder(tempFilePath, {
@@ -331,7 +348,7 @@ client.on('messageCreate', async message => {
             const role = guild.roles.cache.get(roleId);
             if (!role) continue;
 
-            const { count, memberIds } = countMembersWithCountRole(
+            const { count } = countMembersWithCountRole(
                 guild.members.cache,
                 roleId,
                 countRoles,
@@ -341,7 +358,6 @@ client.on('messageCreate', async message => {
             );
 
             totalRoleCount += count;
-            memberIds.forEach(id => globalCountedMembers.add(id));
 
             let percentage;
             if (i === 0 || i === 1) {

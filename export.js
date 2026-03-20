@@ -104,6 +104,8 @@ async function getUserMessageCount(guild, userId, progress) {
                 progress.updateTotalMessagesFetched(messages.size);
             }
 
+            channel.messages.cache.clear();
+
             if (channelMessages > 0) {
                 debugLog(`Channel ${channel.name}: ${channelMessages} messages for user ${userId}`);
             }

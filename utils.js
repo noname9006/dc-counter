@@ -1,14 +1,35 @@
-const fs = require('fs').promises;
+const fs = require('fs');
 const path = require('path');
+
+// Module-level state for the per-day write stream
+let _logStream = null;
+let _logStreamDate = null;
+
+function _getLogStream() {
+    const today = new Date().toISOString().split('T')[0];
+    if (_logStreamDate !== today) {
+        if (_logStream) {
+            _logStream.end();
+            _logStream.on('error', err => console.error('Log stream close error:', err));
+        }
+        const logDir = 'logs';
+        try {
+            fs.mkdirSync(logDir, { recursive: true });
+        } catch (err) {
+            console.error('Failed to create log directory:', err);
+        }
+        const logFile = path.join(logDir, `debug_${today}.log`);
+        _logStream = fs.createWriteStream(logFile, { flags: 'a' });
+        _logStreamDate = today;
+    }
+    return _logStream;
+}
 
 // Debug logging function
 function debugLog(message, details = null) {
     if (process.env.DEBUG_MODE !== 'true') return;
 
     const timestamp = new Date().toISOString();
-    const logDir = 'logs';
-    const logDate = timestamp.split('T')[0];
-    const logFile = path.join(logDir, `debug_${logDate}.log`);
     
     let logMessage = `[${timestamp}] ${message}`;
     if (details) {
@@ -18,10 +39,12 @@ function debugLog(message, details = null) {
     // Console output
     console.log(logMessage);
     
-    // File output
-    fs.mkdir(logDir, { recursive: true })
-        .then(() => fs.appendFile(logFile, logMessage + '\n'))
-        .catch(err => console.error('Logging failed:', err));
+    // File output via reused write stream
+    try {
+        _getLogStream().write(logMessage + '\n');
+    } catch (err) {
+        console.error('Logging failed:', err);
+    }
 }
 
 // Format date for CSV
