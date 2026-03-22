@@ -99,6 +99,9 @@ async function getUserMessageCount(guild, userId, progress) {
                 totalMessages += userMessages.size;
                 lastMessageId = messages.last().id;
 
+                // Clear after each batch to keep memory bounded
+                channel.messages.cache.clear();
+
                 if (messages.size < MESSAGE_BATCH_SIZE) break;
 
                 progress.updateTotalMessagesFetched(messages.size);
@@ -179,10 +182,16 @@ async function exportUserDataToCSV(guild, progressMessage) {
     const members = Array.from(guild.members.cache.values())
         .filter(member => !member.user.bot && !progress.processedUsers.has(member.id));
 
+    // Release cache after extracting the member list we need
+    guild.members.cache.clear();
+
     progress.totalBatches = Math.ceil(members.length / BATCH_SIZE);
 
     const tempFilePath = path.join(process.cwd(), `temp_export_${guild.id}_${Date.now()}.csv`);
     const finalFilePath = path.join(process.cwd(), `user_data_${guild.id}_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+
+    // Write BOM at the very start so no large in-memory read is needed at the end
+    await fs.writeFile(tempFilePath, '\ufeff');
 
     try {
         for (let i = 0; i < members.length; i += BATCH_SIZE) {
@@ -228,10 +237,8 @@ async function exportUserDataToCSV(guild, progressMessage) {
             await fs.appendFile(tempFilePath, csvRows.map(row => row.join(',')).join('\n') + '\n');
         }
 
-        const BOM = '\ufeff';
-        const finalContent = BOM + await fs.readFile(tempFilePath, 'utf-8');
-        await fs.writeFile(finalFilePath, finalContent);
-        await fs.unlink(tempFilePath);
+        // Rename temp file to final path — BOM was already written at the start
+        await fs.rename(tempFilePath, finalFilePath);
         
         // Final progress update
         await updateProgressMessage(progressMessage, progress, members[members.length - 1], members, progress.startTime);

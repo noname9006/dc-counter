@@ -39,6 +39,10 @@ function debugLog(message, isMemberInfo = false, ...args) {
 }
 
 const client = new Client({
+    makeCache: Options.cacheWithLimits({
+        MessageManager: 50,         // max 50 messages per channel
+        GuildMemberManager: 500,    // cap total members in cache
+    }),
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
@@ -48,16 +52,16 @@ const client = new Client({
     partials: [Partials.Channel],
     sweepers: {
         guildMembers: {
-            interval: 1800,      // sweep every 30 minutes
-            filter: () => member => !member.user.bot
+            interval: 300,       // sweep every 5 minutes
+            filter: () => member => member.id !== client.user?.id
         },
         users: {
             interval: 3600,
             filter: () => user => user.id !== client.user?.id
         },
         messages: {
-            interval: 1800,
-            lifetime: 900        // evict messages older than 15 minutes
+            interval: 300,
+            lifetime: 600        // evict messages older than 10 minutes
         }
     }
 });
@@ -142,7 +146,9 @@ async function updateChannelNames() {
     }
 
     try {
-        await guild.members.fetch();
+        await guild.members.fetch().catch(err => {
+            debugLog('Warning: member fetch failed, using cached data:', err.message);
+        });
         debugLog('Fetched all guild members');
 
         // Update total member count
@@ -154,9 +160,18 @@ async function updateChannelNames() {
             debugLog(`Updated total member count channel: ${newName}`);
         }
 
+        // Single pass: build a map of roleId -> count
+        const roleCounts = new Map();
+        for (const [, member] of guild.members.cache) {
+            if (member.user.bot) continue;
+            if (!member.roles.cache.has(verifiedRoleId)) continue;
+            const highest = getHighestCountRole(member, countRoles, ignoredRoleIds, guild);
+            if (highest) {
+                roleCounts.set(highest.id, (roleCounts.get(highest.id) || 0) + 1);
+            }
+        }
+
         // Update role-specific channels
-        let countedMembers = new Set();
-        
         for (let i = 0; i < scheduledRoles.length; i++) {
             const roleId = scheduledRoles[i];
             const channelId = scheduledChannels[i];
@@ -172,21 +187,16 @@ async function updateChannelNames() {
                 continue;
             }
 
-            const { count } = countMembersWithCountRole(
-                guild.members.cache,
-                roleId,
-                countRoles,
-                verifiedRoleId,
-                ignoredRoleIds,
-                countedMembers
-            );
-
+            const count = roleCounts.get(roleId) || 0;
             const newName = channelNameFormat.replace('{count}', count);
             await channel.setName(newName);
             debugLog(`Updated ${role.name} channel: ${newName}`);
         }
     } catch (error) {
         debugLog('Error in updateChannelNames:', error);
+    } finally {
+        guild.members.cache.clear();
+        debugLog('Cleared member cache after channel name update');
     }
 }
 
@@ -283,6 +293,9 @@ client.on('messageCreate', async message => {
                 writeStream.write(`${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`);
             }
 
+            // Release member cache now that iteration is complete
+            guild.members.cache.clear();
+
             // Close stream and wait for finish
             await new Promise((resolve, reject) => {
                 writeStream.on('finish', resolve);
@@ -327,6 +340,7 @@ client.on('messageCreate', async message => {
 
         if (fullCommand === '!count unverified') {
             // Don't do anything here as it's handled by the countUnverifiedCommand module
+            guild.members.cache.clear();
             return;
         }
 
@@ -340,23 +354,25 @@ client.on('messageCreate', async message => {
                 iconURL: 'https://a-us.storyblok.com/f/1014909/512x512/026e26392f/dark_512-1.png'
             });
 
+        // Single pass: build a map of roleId -> count
+        const roleCounts = new Map();
+        for (const [, member] of guild.members.cache) {
+            if (member.user.bot) continue;
+            if (!member.roles.cache.has(verifiedRoleId)) continue;
+            const highest = getHighestCountRole(member, countRoles, ignoredRoleIds, guild);
+            if (highest) {
+                roleCounts.set(highest.id, (roleCounts.get(highest.id) || 0) + 1);
+            }
+        }
+
         let totalRoleCount = 0;
-        let globalCountedMembers = new Set();
 
         for (let i = 0; i < countRoles.length; i++) {
             const roleId = countRoles[i];
             const role = guild.roles.cache.get(roleId);
             if (!role) continue;
 
-            const { count } = countMembersWithCountRole(
-                guild.members.cache,
-                roleId,
-                countRoles,
-                verifiedRoleId,
-                ignoredRoleIds,
-                globalCountedMembers
-            );
-
+            const count = roleCounts.get(roleId) || 0;
             totalRoleCount += count;
 
             let percentage;
@@ -407,18 +423,20 @@ client.on('messageCreate', async message => {
 
          // Verify counts
         if (DEBUG_MODE) {
+            const totalCountedByRole = Array.from(roleCounts.values()).reduce((sum, n) => sum + n, 0);
             debugLog('\n=== Final Count Verification ===');
             debugLog(`Total members: ${totalMembers}`);
             debugLog(`Total role count: ${totalRoleCount}`);
-            debugLog(`Counted unique members: ${globalCountedMembers.size}`);
-            debugLog(`Unaccounted verified members: ${totalMembers - unverifiedMembers - globalCountedMembers.size}`);
+            debugLog(`Counted unique members: ${totalCountedByRole}`);
+            debugLog(`Unaccounted verified members: ${totalMembers - unverifiedMembers - totalCountedByRole}`);
 
-            // List unaccounted verified members
+            // List unaccounted verified members (verified, no ignored role, but no count role)
             const unaccountedMembers = guild.members.cache
                 .filter(m => 
+                    !m.user.bot &&
                     m.roles.cache.has(verifiedRoleId) && 
-                    !globalCountedMembers.has(m.id) &&
-                    !memberHasIgnoredRole(m, ignoredRoleIds)
+                    !memberHasIgnoredRole(m, ignoredRoleIds) &&
+                    !getHighestCountRole(m, countRoles, ignoredRoleIds, guild)
                 );
 
             if (unaccountedMembers.size > 0) {
@@ -435,6 +453,7 @@ client.on('messageCreate', async message => {
 
         await message.channel.send({ embeds: [embed] });
         debugLog('Count command completed successfully');
+        guild.members.cache.clear();
 
     } catch (error) {
         debugLog('Error in count command:', error);

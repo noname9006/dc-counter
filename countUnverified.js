@@ -63,6 +63,7 @@ function setupCountUnverifiedCommand(client, { allowedChannels, allowedRoles, ve
                 await message.channel.send(currentMessage);
             }
 
+            guild.members.cache.clear();
             debugLog(`Unverified count command completed - ${unverifiedMembers.size} members listed in ${messageNumber} messages`);
 
         } catch (error) {

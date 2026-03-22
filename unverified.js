@@ -70,6 +70,7 @@ function setupExtractCommands(client, { allowedChannels, allowedRoles, verifiedR
                     files: [attachment]
                 });
 
+                guild.members.cache.clear();
                 debugLog(`Extract command completed - ${unverifiedMembers.size} members exported to ${fileName}`);
             } catch (error) {
                 debugLog('Error in extract command:', error);
@@ -133,6 +134,7 @@ function setupExtractCommands(client, { allowedChannels, allowedRoles, verifiedR
                     files: [attachment]
                 });
 
+                guild.members.cache.clear();
                 debugLog(`Extract noroles command completed - ${noRoleMembers.size} members exported to ${fileName}`);
             } catch (error) {
                 debugLog('Error in extract noroles command:', error);
