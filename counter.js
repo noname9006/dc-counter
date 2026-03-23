@@ -165,7 +165,7 @@ async function updateChannelNames() {
         for (const [, member] of guild.members.cache) {
             if (member.user.bot) continue;
             if (!member.roles.cache.has(verifiedRoleId)) continue;
-            const highest = getHighestCountRole(member, countRoles, ignoredRoleIds, guild);
+            const highest = getHighestCountRole(member, scheduledRoles, ignoredRoleIds, guild);
             if (highest) {
                 roleCounts.set(highest.id, (roleCounts.get(highest.id) || 0) + 1);
             }
