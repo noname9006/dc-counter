@@ -1,0 +1,9 @@
+node_modules/
+*.env
+.env
+logs/
+*.log
+export_progress_*.json
+temp_export_*.csv
+user_data_*.csv
+user_export.csv

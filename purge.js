@@ -82,7 +82,11 @@ class PurgeOperation {
             this.log('ERROR', { reason: `Guild ${this.guildId} not found in cache` });
             return;
         }
-        await guild.members.fetch();
+
+        // Only fetch members if the cache is empty or stale (< 10 cached members)
+        if (guild.members.cache.size < 10) {
+            await guild.members.fetch();
+        }
 
         const now = new Date();
         const cutoffDate = new Date(now - 24 * 60 * 60 * 1000); // 24 hours ago
@@ -148,6 +152,9 @@ class PurgeOperation {
             // Delay between kicks to prevent rate limiting
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
+
+        // Release member cache after processing
+        guild.members.cache.clear();
     }
 
     getStatus() {
