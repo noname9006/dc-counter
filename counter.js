@@ -41,7 +41,6 @@ function debugLog(message, isMemberInfo = false, ...args) {
 const client = new Client({
     makeCache: Options.cacheWithLimits({
         MessageManager: 50,         // max 50 messages per channel
-        GuildMemberManager: 500,    // cap total members in cache
     }),
     intents: [
         GatewayIntentBits.Guilds,
@@ -51,10 +50,6 @@ const client = new Client({
     ],
     partials: [Partials.Channel],
     sweepers: {
-        guildMembers: {
-            interval: 300,       // sweep every 5 minutes
-            filter: () => member => member.id !== client.user?.id
-        },
         users: {
             interval: 3600,
             filter: () => user => user.id !== client.user?.id
@@ -146,9 +141,7 @@ async function updateChannelNames() {
     }
 
     try {
-        await guild.members.fetch().catch(err => {
-            debugLog('Warning: member fetch failed, using cached data:', err.message);
-        });
+        await guild.members.fetch();
         debugLog('Fetched all guild members');
 
         // Update total member count
