@@ -286,9 +286,6 @@ client.on('messageCreate', async message => {
                 writeStream.write(`${userId},"${username}","${highestRole}","${serverJoinDate}","${discordJoinDate}",${messagesNumber}\n`);
             }
 
-            // Release member cache now that iteration is complete
-            guild.members.cache.clear();
-
             // Close stream and wait for finish
             await new Promise((resolve, reject) => {
                 writeStream.on('finish', resolve);
@@ -310,15 +307,20 @@ client.on('messageCreate', async message => {
             fs.unlinkSync(tempFilePath);
             
             debugLog('Export command completed successfully');
-            return;
         } catch (error) {
             debugLog('Error in export command:', error);
             await message.channel.send('An error occurred while generating the export.');
-            return;
+        } finally {
+            message.guild.members.cache.clear();
+            debugLog('Cleared member cache after export command');
         }
+        return;
     }
 
-    // If not export command, must be !count or !count unverified
+    // Early return before the try block — handled by countUnverifiedCommand module
+    if (fullCommand === '!count unverified') return;
+
+    // If not export command, must be !count
     try {
         const guild = message.guild;
         await guild.members.fetch();
@@ -330,12 +332,6 @@ client.on('messageCreate', async message => {
             !member.user.bot && !member.roles.cache.has(verifiedRoleId)
         ).size;
         const unverifiedPercentage = ((unverifiedMembers / totalMembers) * 100).toFixed(1);
-
-        if (fullCommand === '!count unverified') {
-            // Don't do anything here as it's handled by the countUnverifiedCommand module
-            guild.members.cache.clear();
-            return;
-        }
 
         // Regular !count command - use the same embed styling as index13m.js
         const embed = new EmbedBuilder()
@@ -446,12 +442,14 @@ client.on('messageCreate', async message => {
 
         await message.channel.send({ embeds: [embed] });
         debugLog('Count command completed successfully');
-        guild.members.cache.clear();
 
     } catch (error) {
         debugLog('Error in count command:', error);
         debugLog(`Error stack: ${error.stack}`);
         await message.channel.send('An error occurred while counting members.');
+    } finally {
+        message.guild.members.cache.clear();
+        debugLog('Cleared member cache after count command');
     }
 });
 
